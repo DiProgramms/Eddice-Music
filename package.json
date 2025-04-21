@@ -1,0 +1,25 @@
+{
+  "name": "package.json",
+  "version": "1.0.0",
+  "description": "Um bot que tem como intuito de tocar musicas seja do Youtube ou Spotify, também tem o intuito de executar rolagens de dados em mundos de RPG.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "musicas",
+    "rolagem",
+    "dados",
+    "RPG."
+  ],
+  "author": "Edilson Benedito Gonçalves",
+  "license": "ISC",
+  "dependencies": {
+    "@discordjs/voice": "^0.18.0",
+    "@distube/ytdl-core": "^4.16.8",
+    "axios": "^1.8.4",
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.5.0",
+    "yt-search": "^2.6.1"
+  }
+}
