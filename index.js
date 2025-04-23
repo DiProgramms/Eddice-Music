@@ -42,31 +42,44 @@ client.on('messageCreate', async message => {
     if(command === 'help') {
         //Lógica para exibir informações de ajuda 
         const helpMessage = `
-        **🎵 Comandos disponíveis:**
-        - \`!ed play [link]\` — Toca música do YouTube ou Spotify.
-        - \`!ed pause\` — Pausa a música.
-        - \`!ed resume\` — Retoma a música.
-        - \`!ed stop\` — Para e limpa a fila.
-        - \`!ed skip\` — Pula a faixa.
-        - \`!ed repeat current\` — Ativa/desativa repetição.
-        - \`!ed roll 1d20+5\` — Rola um dado.
-        `;
+    **🎵 Comandos disponíveis:**
+    - \`!ed play [link]\` — Toca música do YouTube.
+    - \`!ed pause\` — Pausa a música.
+    - \`!ed resume\` — Retoma a música.
+    - \`!ed stop\` — Para e limpa a fila.
+    - \`!ed skip\` — Pula a faixa.
+    - \`!ed back\` — Volta para a faixa anterior.
+    - \`!ed repeat current\` — Ativa/desativa repetição.
+    - \`!ed starttime <s>\` — Define início da faixa.
+    - \`!ed stoptime <s>\` — Define término da faixa.
+    - \`!ed restart\` — Reinicia a faixa atual.
+    - \`!ed roll 1d20+1d12-3\` — Rola múltiplos dados.
+    `;
         return message.channel.send(helpMessage);
     }
 
     if(command === 'play') {    
+        
         //Lógica para reproduzir música usando ytdl
-        const voiceChannel = message.member.voice.channel;
-        if(!voiceChannel) return message.channel.send('Entre em um canal de voz primeiro!');
-        const query = args.join (' ');
-        if(!query) return message.channel.send('Forneça um link ou nome de música.');
 
-        if (play.is_expired()) await play.refreshToken();
+        const voiceChannel = message.member.voice.channel;
+        if(!voiceChannel) 
+            return message.channel.send('Entre em um canal de voz primeiro!');
+
+        const query = args.join (' ');
+        if(!query) 
+            return message.channel.send('Forneça um link ou nome de música.');
+
         const isLink = play.yt_validate(query) === 'video';
-        const results = isLink ? [{ title: query, url: query}] : await play.search(query, { limit: 1 });
-        if (!results.length) return message.channel.send('Nenhum resultado encontrado.');
+        const results = isLink 
+        ? [{ title: query, url: query}] : 
+        await play.search(query, { limit: 1 });
+
+        if (!results.length) 
+            return message.channel.send('Nenhum resultado encontrado.');
 
         const song = { title: results[0].title, url: results[0].url };
+
         if (serverQueue) {
             serverQueue.songs.push(song);
             return message.channel.send(`✅ Adicionado à fila: ${song.title}`);
@@ -77,10 +90,11 @@ client.on('messageCreate', async message => {
             connection: null,
             player: null,
             songs: [song],
+            history: [],
             repeat: false,
             isBack: false,
             startTime: 0,
-            stopTime: 0,
+            stopTime: null,
         };
         queue.set(message.guild.id, queueContruct);
 
@@ -208,9 +222,9 @@ client.on('messageCreate', async message => {
         //Lógica para rolar dados
         try{
             const result = rollDice(args.join(' '));
-            message.channel.send(`🎲 Resultado: ${result}`);
+            return message.channel.send(`🎲 Resultado: ${result}`);
         }catch(err){
-            message.channel.send(`❌ Erro: ${err.message}`);
+            return message.channel.send(`❌ Erro: ${err.message}`);
         }
     }
 });
@@ -252,7 +266,7 @@ async function playNextSong(guildId) {
 }
 
 function rollDice(input){
-        const terms = input.math(/([+-]?[^+-]+)/g);
+        const terms = input.match(/([+-]?[^+-]+)/g);
         if(!terms) throw new Error('Formato Inválido.');
         let total = 0;
         for(const term of terms){
