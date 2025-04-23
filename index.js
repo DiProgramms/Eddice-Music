@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const youtubeCookie = process.env.YOUTUBE-COOKIES;
+const youtubeCookie = process.env.YOUTUBE_COOKIES;
 if(!youtubeCookie) {
     console.error('❌ YOUTUBE-COOKIES não definido. Verifique o arquivo .env.');
     process.exit(1);
