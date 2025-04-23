@@ -1,10 +1,13 @@
 require('dotenv').config();
 
+const youtubeCookie = process.env.YOUTUBE-COOKIES;
+if(!youtubeCookie) {
+    console.error('❌ YOUTUBE-COOKIES não definido. Verifique o arquivo .env.');
+    process.exit(1);
+}
 const express = require('express');
 const app = express();
 const port = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send('Bot Online'));
-app.listen(port, () => console.log(`Servidor rodando na porta ${port}`));
 
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { joinVoiceChannel, 
@@ -13,13 +16,63 @@ const { joinVoiceChannel,
         AudioPlayerStatus, 
         NoSubscriberBehavior, 
         StreamType } = require('@discordjs/voice'); 
+
+
 const play = require('play-dl');
-play.setToken({
-    youtube: {
-       cookie: process.env.YOUTUBE_TOKEN,
+play.setToken({ youtube: { cookie: youtubeCookie,} });
+
+// Estratégias adicionais para reduzir 429:
+// 1. Exponential backoff em caso de 429
+// 2. Cache de resultados de search (cache simples em memória)
+// 3. Introduzir delays aleatórios entre requisições
+// 4. Usar play.authorization() interativo para gerar .data/youtube.data
+
+const searchCache = new Map();
+
+async function searchWithRetry(query, limit = 1, retries = 3, delay = 100){
+    if(searchCache.has(query)){
+        return searchCache.get(query);
     }
 
-});
+    for (let i = 0; i < retries; i++){
+        try {
+            await new Promise(resolve => setTimeout(res, delay *Math.random()));
+            const results = await play.search(query, { limit });
+            searchCache.set(query, results);
+            return results;
+
+        } catch (err) {
+            if(err.statusCode === 429){
+                const backoff = delay * Math.pow(2, i);
+                console.warn(`⚠️ 429 recebido. Retry em ${backoff}ms (tentativa ${i + 1}/${retries})`);
+                await new Promise(resolve => setTimeout(res, backoff));
+                continue;
+        }
+        throw err;
+     }
+    }
+throw new Error('Muitas requisições - tente novamente mais tarde.');
+}
+
+async function streamWithRetry(url, option = { discordPlayerCompatibility: true}, retries = 2, delay = 1000){
+    for (let i = 0; i < retries; i++){
+        try {
+            return await play.stream(url, option);
+        } catch (err) {
+            if(err.statusCode === 429){
+                const backoff = delay * Math.pow(2, i);
+                console.warn(`⚠️ 429 no stream. Retry em ${backoff}ms (tentativa ${i + 1}/${retries})`);
+                await new Promise(res => setTimeout(res, backoff));
+                continue;
+            }
+        throw err;
+        }
+       }
+       throw new Error('');
+}
+
+app.get('/', (req, res) => res.send('Bot Online'));
+app.listen(port, () => console.log(`Servidor rodando na porta ${port}`));
 
 const client = new Client({
     intents: [
@@ -30,7 +83,6 @@ const client = new Client({
     ],
     partials: [Partials.Channel]
 });
-
 const prefix ='!ed'; //Prefixo para os comandos
 const queue = new  Map();
 
@@ -49,7 +101,7 @@ client.on('messageCreate', async message => {
         //Lógica para exibir informações de ajuda 
         const helpMessage = `
     **🎵 Comandos disponíveis:**
-    - \`!ed play [link]\` — Toca música do YouTube.
+    - \`!ed play [link|nome]\` — Toca música do YouTube.
     - \`!ed pause\` — Pausa a música.
     - \`!ed resume\` — Retoma a música.
     - \`!ed stop\` — Para e limpa a fila.
@@ -65,25 +117,19 @@ client.on('messageCreate', async message => {
     }
 
     if(command === 'play') {    
-        
         //Lógica para reproduzir música usando ytdl
-
         const voiceChannel = message.member.voice.channel;
-        if(!voiceChannel) 
-            return message.channel.send('Entre em um canal de voz primeiro!');
+        if(!voiceChannel) return message.channel.send('Entre em um canal de voz primeiro!');
 
         const query = args.join (' ');
-        if(!query) 
-            return message.channel.send('Forneça um link ou nome de música.');
+        if(!query) return message.channel.send('Forneça um link ou nome de música.');
 
         const isLink = play.yt_validate(query) === 'video';
         const results = isLink 
-        ? [{ title: query, url: query}] : 
-        await play.search(query, { limit: 1 });
+        ? [{ title: query, url: query}] 
+        : await searchWithRetry(query);
 
-        if (!results.length) 
-            return message.channel.send('Nenhum resultado encontrado.');
-
+        if (!results.length) return message.channel.send('Nenhum resultado encontrado.');
         const song = { title: results[0].title, url: results[0].url };
 
         if (serverQueue) {
@@ -108,19 +154,18 @@ client.on('messageCreate', async message => {
             const connection = joinVoiceChannel({
                 channelId: voiceChannel.id,
                 guildId: message.guild.id,
-                adapterCreator: message.guild.voiceAdapterCreator,
+                adapterCreator: message.guild.voiceAdapterCreator
             });
+
             const player = createAudioPlayer({ behaviors: { noSubscriberBehavior: NoSubscriberBehavior.Pause } });
             connection.subscribe(player);
             queueContruct.connection = connection;
             queueContruct.player = player;
             playNextSong(message.guild.id);
-
         } catch (error) {
             console.error('Erro ao conectar ao canal de voz:', error);
             queue.delete(message.guild.id);
             return message.channel.send('❌ Erro ao conectar ao canal de voz.');
-            
         }
         
     }
@@ -239,34 +284,31 @@ async function playNextSong(guildId) {
     const serverQueue = queue.get(guildId);
     if (!serverQueue) return;
 
-    let song = serverQueue.songs.shift();
+    const song = serverQueue.songs.shift();
     if(!song){
         serverQueue.connection.destroy();
-        return queue.delete(guildId);
+        queue.delete(guildId);
+        return;
     }
 
     serverQueue.history.push(song);
     try{
-        const ytStream = await play.stream(song.url, { discordPlayerCompatibility: true });
+        const ytStream = await streamWithRetry(song.url);
+        const resource = createAudioResource(ytStream.stream, { 
+            inputType: ytStream.type || StreamType.Arbitrary, 
+            metadata: song 
+        });
 
-        const resource = createAudioResource(ytStream.stream, { inputType: ytStream.type || 
-            StreamType.Arbitrary, metadata: song });
         serverQueue.player.play(resource);
         serverQueue.textChannel.send(`🎶 Tocando agora: ${song.title}`);
 
-        if(serverQueue.stopTime){
-            const after = serverQueue.stopTime - (serverQueue.startTime || 0);
-            if(after > 0){
-                setTimeout(() => serverQueue.player.stop(), after * 1000);
-                }
-                }
         serverQueue.player.on(AudioPlayerStatus.Idle, () => {
             if(!serverQueue.isBack && !serverQueue.repeat) serverQueue.history.pop();
                 serverQueue.isBack = false;
                 playNextSong(guildId);
             });
         }catch(err){
-            console.error(err);
+            console.error('Erro no stream', err);
             playNextSong(guildId);
         }
 }
