@@ -14,6 +14,12 @@ const { joinVoiceChannel,
         NoSubscriberBehavior, 
         StreamType } = require('@discordjs/voice'); 
 const play = require('play-dl');
+play.setToken({
+    youtube: {
+       cookie: process.env.YOUTUBE_TOKEN,
+    }
+
+});
 
 const client = new Client({
     intents: [
