@@ -1,11 +1,19 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, getVoiceConnection, StreamType } = require('@discordjs/voice'); 
-const ytdl = require('@distube/ytdl-core')
-const { parse } = require('path');
-const { error } = require('console');
-const yts = require('yt-search');
 
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('Bot Online'));
+app.listen(port, () => console.log(`Servidor rodando na porta ${port}`));
+
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { joinVoiceChannel, 
+        createAudioPlayer,
+        createAudioResource, 
+        AudioPlayerStatus, 
+        NoSubscriberBehavior, 
+        StreamType } = require('@discordjs/voice'); 
+const play = require('play-dl');
 
 const client = new Client({
     intents: [
@@ -48,55 +56,58 @@ client.on('messageCreate', async message => {
 
     if(command === 'play') {    
         //Lógica para reproduzir música usando ytdl
-
         const voiceChannel = message.member.voice.channel;
-        if(!voiceChannel) return message.reply('Você precisa estar em um canal de voz para usar esse comando!');
+        if(!voiceChannel) return message.channel.send('Entre em um canal de voz primeiro!');
+        const query = args.join (' ');
+        if(!query) return message.channel.send('Forneça um link ou nome de música.');
 
-        let query = args.join(' ');
-        if (!query) return message.channel.send('❌ Você precisa fornecer um link ou nome da música.');
+        if (play.is_expired()) await play.refreshToken();
+        const isLink = play.yt_validate(query) === 'video';
+        const results = isLink ? [{ title: query, url: query}] : await play.search(query, { limit: 1 });
+        if (!results.length) return message.channel.send('Nenhum resultado encontrado.');
 
-         //Busca no Youtube
-         const ytSearch = await youtubeSearch(query);
-         if(!ytSearch) return message.channel.send('❌ Música não encontrada no YouTube.');
-         
-         if(!await ytdl.validateURL(ytSearch)){
-            return message.channel.send('❌ O link retornado não é um vídeo válido do YouTube.');
-         }
-         let serverQueue = queue.get(message.guild.id);
+        const song = { title: results[0].title, url: results[0].url };
+        if (serverQueue) {
+            serverQueue.songs.push(song);
+            return message.channel.send(`✅ Adicionado à fila: ${song.title}`);
+        }
 
-         if (serverQueue){
-            serverQueue.songs.push(ytSearch);
-            return message.channel.send(`➕ Música adicionada à fila: ${ytSearch}`);
-
-         }
-
-         const player = createAudioPlayer();
-         const connection = joinVoiceChannel({
-            channelId: voiceChannel.id,
-            guildId: voiceChannel.guild.id,
-            adapterCreator: voiceChannel.guild.voiceAdapterCreator
-
-         });
-
-        serverQueue = {
-            connection,
-            player,
-            songs: [ytSearch],
+        const queueContruct = {
+            textChannel: message.channel,
+            connection: null,
+            player: null,
+            songs: [song],
             repeat: false,
+            isBack: false,
             startTime: 0,
-            stopTime: null,
-            textChannel: message.channel
-         };
+            stopTime: 0,
+        };
+        queue.set(message.guild.id, queueContruct);
 
-        queue.set(message.guild.id, serverQueue);
-        connection.subscribe(player);
+        try {
+            const connection = joinVoiceChannel({
+                channelId: voiceChannel.id,
+                guildId: message.guild.id,
+                adapterCreator: message.guild.voiceAdapterCreator,
+            });
+            const player = createAudioPlayer({ behaviors: { noSubscriberBehavior: NoSubscriberBehavior.Pause } });
+            connection.subscribe(player);
+            queueContruct.connection = connection;
+            queueContruct.player = player;
+            playNextSong(message.guild.id);
+
+        } catch (error) {
+            console.error('Erro ao conectar ao canal de voz:', error);
+            queue.delete(message.guild.id);
+            return message.channel.send('❌ Erro ao conectar ao canal de voz.');
+            
+        }
         
-        playNextSong(message.guild.id);
     }
         
     if(command === 'pause'){
             //Lógica para pausar a música
-            if(serverQueue && serverQueue.player){
+            if(serverQueue?.player){
                 serverQueue.player.pause();
                 message.channel.send('Música pausada.');
             }
@@ -104,50 +115,19 @@ client.on('messageCreate', async message => {
 
     if(command === 'resume'){
         //Lógica para retomar a reprodução da música pausada
-        if(serverQueue && serverQueue.player){
+        if(serverQueue?.player){
             serverQueue.player.unpause();
             message.channel.send('▶️ Música retomada.');  
         }
     }
 
     if(command === 'restart'){
-        if(!serverQueue) return message.channel.send('Nenhuma música para reiniciar');
-
-        const currentUrl = serverQueue.songs[0];
-        let stream;
-        try {
-           stream = ytdl(currentUrl, {
-                filter: 'audioonly',
-                quality: 'highestaudio',
-                highWaterMark: 1 << 25,
-                dlChunkSize: 0,
-            });
-            const resource = createAudioResource(stream, {
-                inputType: StreamType.Arbitrary,
-            });
-
-            serverQueue.player.play(resource);
-            message.channel.send('🔄 Música reiniciada.');
-
-            serverQueue.player.once(AudioPlayerStatus.Idle, () => {
-                if (!serverQueue.repeat) serverQueue.songs.shift();
-                playNextSong(message.guild.id); 
-           });
-
-            serverQueue.player.once('error', error =>{
-                console.error('Erro no player (restart):', error);
-                serverQueue.textChannel.send('❌ Erro ao reiniciar a música.');
-                serverQueue.songs.shift();
-                playNextSong(message.guild.id);
-            });
-
-        } catch (err) {
-            console.error('Erro ao criar o stream:', err);
-            serverQueue.textChannel.send('❌ Erro ao reiniciar a música. Pulando...');
-            serverQueue.songs.shift();
-            return playNextSong(guildId);
-        }
-    
+        if(!serverQueue) return message.channel.send('Nenhuma música está sendo reproduzida.');
+        const last = serverQueue.history[serverQueue.history.length - 1];
+        if (!last) return message.channel.send('Nenhuma música anterior para reiniciar.');
+        serverQueue.songs.unshift(last);
+        serverQueue.player.stop();
+        return message.channel.send(`🔄 Reiniciando: ${last.title}`);
     }
 
     if(command === 'stop'){
@@ -164,55 +144,26 @@ client.on('messageCreate', async message => {
    
     if(command === 'skip'){
         //Lógica para pular para a próxima música na fila
-        if(serverQueue && serverQueue.player){
+        if(serverQueue?.player){
             serverQueue.player.stop();
             message.channel.send('⏭ Música pulada.');
         }
     } 
     
     if(command === 'back'){
-        if(!serverQueue || serverQueue.songs.length < 2) 
-            return message.channel.send('Não há música para voltar');
-
-        // Move a música atual para o fim e puxa a anterior pra tocar agora
-        const current = serverQueue.songs.shift();
-        serverQueue.songs.unshift(serverQueue.songs.pop());
-        serverQueue.songs.unshift(current);
-
-        try {
-            const stream = ytdl(serverQueue.songs[0], {
-                filter: 'audioonly',
-                quality: 'highestaudio',
-                highWaterMark: 1 << 25,
-                dlChunkSize: 0,
-            });
-
-            const resource = createAudioResource(stream, {
-                inputType: StreamType.Arbitrary,
-            });
-
-            serverQueue.player.play(resource);
-            message.channel.send('⏮ Voltando para a música anterior.');
-
-            serverQueue.player.once(AudioPlayerStatus.Idle, () => {
-                if (!serverQueue.repeat) serverQueue.songs.shift();
-                playNextSong(message.guild.id);
-            });
-
-            serverQueue.player.once('error', error => {
-                console.error('Erro no player (back):', error);
-                serverQueue.textChannel.send('❌ Erro ao reproduzir a música.');
-                serverQueue.songs.shift();
-                playNextSong(message.guild.id);
-            });
-        } catch (err) {
-            console.error('Erro ao voltar música:', err);
-            message.channel.send('❌ Erro ao voltar para a música anterior.');
+        if (!serverQueue || serverQueue.songs.length < 2    ) {
+            return message.channel.send('Nenhuma música anterior para voltar.');
         }
+        serverQueue.history.pop();
+        const prev = serverQueue.history.pop();
+        serverQueue.songs.unshift(prev);
+        serverQueue.isBack = true;
+        serverQueue.player.stop();
+        return message.channel.send(`⏪ Voltando para: ${prev.title}`);
     }
 
     if(command === 'starttime' && args[0]){
-       const time = parseInt(args[0]);
+       const time = parseInt(args[0], 10);
        if (isNaN(time) || time <0) return message.channel.send('⛔ Tempo inválido.');
 
        if (!serverQueue) return message.channel.send('Nenhuma música está sendo reproduzida.');
@@ -231,13 +182,11 @@ client.on('messageCreate', async message => {
         message.channel.send(`⏱ Término definido para ${time}s. (Ainda precisa ser implementado com timeout)`);
     }
 
-    if(command === 'repeat' && args[0] === 'current'){
-        //Lógica para ativar/desativar o modo de repetição da música atual
-        if(serverQueue){
-           serverQueue.repeat = !serverQueue.repeat;
-           message.channel.send(`🔁 Repetição ${serverQueue.repeat ? 'ativada' : 'desativada'}.`);
-            }
-
+    if(command === 'repeat' ){
+        if(args[0] === 'current'){
+            serverQueue.repeat = !serverQueue.repeat;
+            return messsage.channel.send(`🔁 Repetição ${serverQueue.repeat ? 'ativada' : 'desativada'}.`);
+        }
     }
 
     if(command === 'fila'){
@@ -257,9 +206,8 @@ client.on('messageCreate', async message => {
 
     if(command === 'roll') {
         //Lógica para rolar dados
-        const rollCommand = args.join(' ');
         try{
-            const result = rollDice(rollCommand);
+            const result = rollDice(args.join(' '));
             message.channel.send(`🎲 Resultado: ${result}`);
         }catch(err){
             message.channel.send(`❌ Erro: ${err.message}`);
@@ -269,91 +217,60 @@ client.on('messageCreate', async message => {
 
 async function playNextSong(guildId) {
     const serverQueue = queue.get(guildId);
-    if (!serverQueue || serverQueue.songs.length === 0){
-        if(serverQueue && serverQueue.connection){
-            serverQueue.connection.destroy();
-        }
-        queue.delete(guildId);
-        return;
+    if (!serverQueue) return;
+
+    let song = serverQueue.songs.shift();
+    if(!song){
+        serverQueue.connection.destroy();
+        return queue.delete(guildId);
     }
 
-    const currentSong = serverQueue.songs[0];
-    try {
-        const songInfo = await ytdl.getInfo(currentSong);
-        const stream = ytdl.downloadFromInfo(songInfo, {
-            filter: 'audioonly',
-            quality: 'highestaudio',
-            highWaterMark: 1 << 25,
-            dlChunkSize: 0,
-        });
-        const resource = createAudioResource(stream, {
-            inputType: StreamType.Arbitrary,
-            metadata: songInfo,
-        });
+    serverQueue.history.push(song);
+    try{
+        const ytStream = await play.stream(song.url, { discordPlayerCompatibility: true });
 
+        const resource = createAudioResource(ytStream.stream, { inputType: ytStream.type || 
+            StreamType.Arbitrary, metadata: song });
         serverQueue.player.play(resource);
-        serverQueue.textChannel.send(`🎶 Tocando agora: ${currentSong}`);
+        serverQueue.textChannel.send(`🎶 Tocando agora: ${song.title}`);
 
-        const stopAfter = serverQueue.stopTime - (serverQueue.startTime || 0);
-        if(!isNaN(stopAfter) && stopAfter > 0){
-            setTimeout(() => {
-                serverQueue.player.stop();
-                serverQueue.textChannel.send('⏱ Música interrompida no stopTime.');
-            }, stopAfter * 1000);
+        if(serverQueue.stopTime){
+            const after = serverQueue.stopTime - (serverQueue.startTime || 0);
+            if(after > 0){
+                setTimeout(() => serverQueue.player.stop(), after * 1000);
+                }
+                }
+        serverQueue.player.on(AudioPlayerStatus.Idle, () => {
+            if(!serverQueue.isBack && !serverQueue.repeat) serverQueue.history.pop();
+                serverQueue.isBack = false;
+                playNextSong(guildId);
+            });
+        }catch(err){
+            console.error(err);
+            playNextSong(guildId);
         }
-    
-        serverQueue.player.once(AudioPlayerStatus.Idle, () =>{
-            if (!serverQueue.repeat)
-                serverQueue.songs.shift();
-            playNextSong(guildId);
-        });
-    
-        serverQueue.player.once('error', error => {
-            console.error('Erro no player:', error);
-            serverQueue.textChannel.send('❌ Erro ao reproduzir a música.');
-            serverQueue.songs.shift();
-            playNextSong(guildId);
-        });
-
-    } catch (err) {
-        console.error('Erro ao criar o stream:', err);
-        serverQueue.textChannel.send('❌ Erro ao acessar a música. Pulando...');
-        serverQueue.songs.shift();
-        return playNextSong(guildId);
-    }
-        
 }
 
-function rollDice(rollCommand){
-    const match = rollCommand.match(/^(\d+)d(\d+)([+-]\d+)?$/);
-    if (!match) throw new Error('Formato inválido. Use por exemplo: 1d20+5');
-
-    const [, diceCount, diceSides, modifier] = match.map((x, i) => (i > 0 ? Number(x) : x));
-    let total = 0;
-
-    for (let i = 0; i < diceCount; i++) {
-        total += Math.floor(Math.random() * diceSides) +1;
-    }
-
-    if(modifier) total += modifier;
-    return total;
- }
-
- async function youtubeSearch(query) {
-    try{
-        const ytSearch = require('yt-search');
-        const result = await ytSearch(query);
-
-        if(result && result.videos && result.videos.length > 0){
-            return result.videos[0].url;
-        }else{
-            console.log('Nenhum vídeo encontrado para:', query);
-            return null;
+function rollDice(input){
+        const terms = input.math(/([+-]?[^+-]+)/g);
+        if(!terms) throw new Error('Formato Inválido.');
+        let total = 0;
+        for(const term of terms){
+            const dice = term.match(/^([+-]?)(\d*)d(\d+)$/);
+            if(dice){
+                const sign = dice[1] === '-' ? -1 : 1;
+                const count = parseInt(dice[2] || '1', 10);
+                const sides = parseInt(dice[3], 10);
+                for(let i=0; i < count; i++){
+                    total += sign * (Math.floor(Math.random() * sides) + 1);
+                }
+            }else if(/^[+-]?\d+$/.test(term)){
+                total += parseInt(term, 10);
+            }else{
+                throw new Error(`Formato Inválido: ${term}`);
+            }
         }
-    }catch(error){
-        console.error('Erro ao buscar no Youtube:', error);
-        return null;
-    }
+        return total;
  }
 
 client.login(process.env.TOKEN);
