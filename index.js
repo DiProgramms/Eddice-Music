@@ -60,21 +60,29 @@ async function getAudioStream(videoURL){
     }
     const idMatch = videoURL.match(/v=([\w-]{11})/);
     const videoId = idMatch ? idMatch[1] : videoURL;
+
     const info = await ytClient.getBasicInfo(videoId);
+    if(info.playabilityStatus?.status !== 'OK'){
+        const reason = info.playabilityStatus?.reason || info.playabilityStatus_status.status;
+        throw new Error(`Erro ao acessar o vídeo: ${reason}`);
+    }
 
     console.log(info);
 
     if(!info.streaming_data || !info.streaming_data.formats.length){
         throw new Error('Nenhum formato de áudio encontrado.');
     }
-    
-    const format = info.chooseFormat({ filter : format => format.mimeType?.startsWith('audio/') });
 
+    const format = info.chooseFormat({ filter : format => format.mimeType?.startsWith('audio/') });
     if(!format || !format.url) {
         throw new Error('Formato de áudio não encontrado.');
     }
     
     const response = await fetch(format.url);
+    if(!response.body) {
+        throw new Error(`Erro ao acessar o stream: ${response.statusText}`);
+    }
+
     return { stream: response.body, type: StreamType.Arbitrary };
 }
 
