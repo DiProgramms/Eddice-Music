@@ -26,35 +26,43 @@ const ytClient = new Innertube();
 
 const searchCache = new Map();
 
-async function getAudioStream(videoURL){
-    const info = await ytClient.getInfo(videoUrl);
-    const format = info.streaming.formats.find(f => f.mimeType.startsWith('audio/'));
-    if(!format) {
-        throw new Error('Formato de áudio não encontrado.');
-    }
-    return {
-        stream: () => fetch(format.url).then(res => res.body),
-        type: StreamType.Arbitrary
-    };
-}
-
 async function searchYoutube(query) {
     if(searchCache.has(query)) {
         return searchCache.get(query);
     }
-    if(play.yt_validate(query) === 'video'){
-        const direct = { title: query, url: query };
+
+    const isYoutubeUrl = /^https?:\/\/(www\.)?(youtu\.be|youtube\.com)\/.+/.test(query);
+    if(isYoutubeUrl){
+        const direct = { title: 'Direto', url: query };
         searchCache.set(query, direct);
         return direct;
-        }
-        const res = await yt.search.list({ part: 'snippet', q: query, type: 'video', maxResults: 1 });
-        if(!res.data.items.length) throw new Error('Nenhum vídeo encontrado.');
-        const items = res.data.items[0];
-        const result = { title: items.snippet.title, url: `https://www.youtube.com/watch?v=${items.id.videoId}` };
-        searchCache.set(query, result);
-        return result;
+    }
+
+    const res = await yt.search.list({ part: 'snippet', q: query, type: 'video', maxResults: 1 });
+    if(res.data.items.length) {
+        throw new Error('Nenhum resultado encontrado.');
+    }
+
+    const item = res.data.items[0];
+    const videoId = item.id.videoId;
+    const result = {
+        title: item.snippet.title,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+    };
+    searchCache.set(query, result);
+    return result;
 }
 
+async function getAudioStream(videoURL){
+    const info = await ytClient.getInfo(videoURL);
+    const format = info.streaming.formats.find(f => f.mimeType.startsWith('audio/'));
+    if(!format) {
+        throw new Error('Formato de áudio não encontrado.');
+    }
+    
+    const response = await fetch(format.url);
+    return { stream: response.body, type: StreamType.Arbitrary };
+}
 
 app.get('/', (req, res) => res.send('Bot Online'));
 app.listen(port, () => console.log(`Servidor rodando na porta ${port}`));
@@ -278,7 +286,7 @@ async function playNextSong(guildId) {
         const ytStream = await getAudioStream(song.url);
 
         const resource = createAudioResource(ytStream.stream, { 
-            inputType: ytStream.type || StreamType.Arbitrary, 
+            inputType: ytStream.type, 
             metadata: song 
         });
 
