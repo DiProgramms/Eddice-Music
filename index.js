@@ -16,7 +16,11 @@ const { joinVoiceChannel,
 
 
 const { Innertube } = require('youtubei.js');
-const ytClient = new Innertube();
+
+let ytClient;
+(async () => {
+    ytClient = await Innertube.create();
+})().catch(err => console.error('Erro ao inicializar o cliente do YouTube:', err));
 
 // Estratégias adicionais para reduzir 429:
 // 1. Exponential backoff em caso de 429
@@ -27,11 +31,9 @@ const ytClient = new Innertube();
 const searchCache = new Map();
 
 async function searchYoutube(query) {
-    if(searchCache.has(query)) {
-        return searchCache.get(query);
-    }
-
+    if(searchCache.has(query)) { return searchCache.get(query); }
     const isYoutubeUrl = /^https?:\/\/(www\.)?(youtu\.be|youtube\.com)\/.+/.test(query);
+
     if(isYoutubeUrl){
         const direct = { title: 'Direto', url: query };
         searchCache.set(query, direct);
@@ -39,10 +41,9 @@ async function searchYoutube(query) {
     }
 
     const res = await yt.search.list({ part: 'snippet', q: query, type: 'video', maxResults: 1 });
-    if(res.data.items.length) {
+    if(!res.data.items.length) {
         throw new Error('Nenhum resultado encontrado.');
     }
-
     const item = res.data.items[0];
     const videoId = item.id.videoId;
     const result = {
@@ -54,8 +55,13 @@ async function searchYoutube(query) {
 }
 
 async function getAudioStream(videoURL){
-    const info = await ytClient.getInfo(videoURL);
-    const format = info.streaming.formats.find(f => f.mimeType.startsWith('audio/'));
+    if(!ytClient){
+        throw new Error('Cliente do YouTube não inicializado.');
+    }
+    const idMatch = videoURL.match(/v=([\w-]{11})/);
+    const videoId = idMatch ? idMatch[1] : videoURL;
+    const info = await ytClient.getBasicInfo(videoId);
+    const format = info.chooseFormat({ filter: formats => formats.find(f => f.mimeType.startsWith('audio/')) });
     if(!format) {
         throw new Error('Formato de áudio não encontrado.');
     }
@@ -284,7 +290,6 @@ async function playNextSong(guildId) {
     try{
         
         const ytStream = await getAudioStream(song.url);
-
         const resource = createAudioResource(ytStream.stream, { 
             inputType: ytStream.type, 
             metadata: song 
