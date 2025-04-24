@@ -15,7 +15,8 @@ const { joinVoiceChannel,
         StreamType } = require('@discordjs/voice'); 
 
 
-const play = require('play-dl');
+const { Innertube } = require('youtubei.js');
+const ytClient = new Innertube();
 
 // Estratégias adicionais para reduzir 429:
 // 1. Exponential backoff em caso de 429
@@ -25,21 +26,16 @@ const play = require('play-dl');
 
 const searchCache = new Map();
 
-async function streamWithRetry(url, options = { discordPlayerCompatibility: true }, retries = 2, delay = 1000) {
-    for (let i = 0; i < retries; i++) {
-        try {
-            return await play.stream(url, options);
-        } catch (err) {
-            if(err.statusCode === 429 && i < retries - 1){
-                const backoff = delay * Math.pow(2, i);
-                console.warn(`⚠️ 429 no stream. Retry em ${backoff}ms (tentativa ${i + 1}/${retries})`);
-                await new Promise(r => setTimeout(r, backoff));
-                continue;
-            }
-            throw err;
-            }
-        }
-    throw new Error('Falha no stream após múltiplas tentativas.');
+async function getAudioStream(videoURL){
+    const info = await ytClient.getInfo(videoUrl);
+    const format = info.streaming.formats.find(f => f.mimeType.startsWith('audio/'));
+    if(!format) {
+        throw new Error('Formato de áudio não encontrado.');
+    }
+    return {
+        stream: () => fetch(format.url).then(res => res.body),
+        type: StreamType.Arbitrary
+    };
 }
 
 async function searchYoutube(query) {
@@ -278,7 +274,9 @@ async function playNextSong(guildId) {
 
     serverQueue.history.push(song);
     try{
-        const ytStream = await streamWithRetry(song.url);
+        
+        const ytStream = await getAudioStream(song.url);
+
         const resource = createAudioResource(ytStream.stream, { 
             inputType: ytStream.type || StreamType.Arbitrary, 
             metadata: song 
