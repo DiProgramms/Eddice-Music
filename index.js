@@ -63,7 +63,7 @@ async function getAudioStream(videoURL){
 
     const info = await ytClient.getBasicInfo(videoId);
     if(info.playabilityStatus?.status !== 'OK'){
-        const reason = info.playabilityStatus?.reason || info.playabilityStatus_status.status;
+        const reason = info.playabilityStatus?.reason || info.playabilityStatus?.status;
         throw new Error(`Erro ao acessar o vídeo: ${reason}`);
     }
 
