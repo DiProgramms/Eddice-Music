@@ -61,8 +61,16 @@ async function getAudioStream(videoURL){
     const idMatch = videoURL.match(/v=([\w-]{11})/);
     const videoId = idMatch ? idMatch[1] : videoURL;
     const info = await ytClient.getBasicInfo(videoId);
-    const format = info.chooseFormat({ filter: formats => formats.find(f => f.mimeType.startsWith('audio/')) });
-    if(!format) {
+
+    console.log(info);
+
+    if(!info.streaming_data || !info.streaming_data.formats.length){
+        throw new Error('Nenhum formato de áudio encontrado.');
+    }
+    
+    const format = info.chooseFormat({ filter : format => format.mimeType?.startsWith('audio/') });
+
+    if(!format || !format.url) {
         throw new Error('Formato de áudio não encontrado.');
     }
     
