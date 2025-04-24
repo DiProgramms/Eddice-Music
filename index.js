@@ -62,8 +62,15 @@ async function getAudioStream(videoURL){
     const videoId = idMatch ? idMatch[1] : videoURL;
 
     const info = await ytClient.getBasicInfo(videoId);
-    if(info.playabilityStatus?.status !== 'OK'){
-        const reason = info.playabilityStatus?.reason || info.playabilityStatus?.status;
+
+    const status = info.playabilityStatus?.status;
+
+    if(status !== 'OK'){
+
+        let reason = info.playabilityStatus?.reason;
+        reason ||=info.playabilityStatus?.errorScreen?.playerErrorMessage?.reason?.simpleText;
+        reason ||= status;
+
         throw new Error(`Erro ao acessar o vídeo: ${reason}`);
     }
 
@@ -73,7 +80,7 @@ async function getAudioStream(videoURL){
         throw new Error('Nenhum formato de áudio encontrado.');
     }
 
-    const format = info.chooseFormat({ filter : format => format.mimeType?.startsWith('audio/') });
+    const format = info.chooseFormat({ filter : fm => fm.mimeType?.startsWith('audio/') });
     if(!format || !format.url) {
         throw new Error('Formato de áudio não encontrado.');
     }
@@ -306,14 +313,9 @@ async function playNextSong(guildId) {
     try{
         
         const ytStream = await getAudioStream(song.url);
-        const resource = createAudioResource(ytStream.stream, { 
-            inputType: ytStream.type, 
-            metadata: song 
-        });
-
+        const resource = createAudioResource(ytStream.stream, { inputType: ytStream.type, metadata: song });
         serverQueue.player.play(resource);
         serverQueue.textChannel.send(`🎶 Tocando agora: ${song.title}`);
-
         serverQueue.player.on(AudioPlayerStatus.Idle, () => {
             if(!serverQueue.isBack && !serverQueue.repeat) serverQueue.history.pop();
                 serverQueue.isBack = false;
@@ -321,7 +323,9 @@ async function playNextSong(guildId) {
             });
         }catch(err){
             console.error('Erro no stream', err);
-            playNextSong(guildId);
+            serverQueue.textChannel.send(`❌ Não foi possível reproduzir **${song.title}**: ${err.message}`);
+            serverQueue.connection.destroy();
+            queue.delete(guildId);
         }
 }
 
