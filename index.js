@@ -19,15 +19,12 @@ const { Innertube } = require('youtubei.js');
 
 let ytClient;
 (async () => {
-    ytClient = await Innertube.create();
+    ytClient = await Innertube.create({
+        session: {
+            cookie: process.env.YOUTUBE_COOKIES
+        }
+    });
 })().catch(err => console.error('Erro ao inicializar o cliente do YouTube:', err));
-
-// Estratégias adicionais para reduzir 429:
-// 1. Exponential backoff em caso de 429
-// 2. Cache de resultados de search (cache simples em memória)
-// 3. Introduzir delays aleatórios entre requisições
-// 4. Usar play.authorization() interativo para gerar .data/youtube.data
-
 const searchCache = new Map();
 
 async function searchYoutube(query) {
