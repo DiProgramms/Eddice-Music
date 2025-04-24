@@ -25,6 +25,23 @@ const play = require('play-dl');
 
 const searchCache = new Map();
 
+async function streamWithRetry(url, options = { discordPlayerCompatibility: true }, retries = 2, delay = 1000) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await play.stream(url, options);
+        } catch (err) {
+            if(err.statusCode === 429 && i < retries - 1){
+                const backoff = delay * Math.pow(2, i);
+                console.warn(`⚠️ 429 no stream. Retry em ${backoff}ms (tentativa ${i + 1}/${retries})`);
+                await new Promise(r => setTimeout(r, backoff));
+                continue;
+            }
+            throw err;
+            }
+        }
+    throw new Error('Falha no stream após múltiplas tentativas.');
+}
+
 async function searchYoutube(query) {
     if(searchCache.has(query)) {
         return searchCache.get(query);
