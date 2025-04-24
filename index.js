@@ -1,10 +1,7 @@
 require('dotenv').config();
+const { google } = require('googleapis');
+const yt = google.youtube( { version: 'v3', auth: process.env.YOUTUBE_API_KEY });
 
-const youtubeCookie = process.env.YOUTUBE_COOKIES;
-if(!youtubeCookie) {
-    console.error('❌ YOUTUBE-COOKIES não definido. Verifique o arquivo .env.');
-    process.exit(1);
-}
 const express = require('express');
 const app = express();
 const port = process.env.PORT || 3000;
@@ -19,7 +16,6 @@ const { joinVoiceChannel,
 
 
 const play = require('play-dl');
-play.setToken({ youtube: { cookie: youtubeCookie,} });
 
 // Estratégias adicionais para reduzir 429:
 // 1. Exponential backoff em caso de 429
@@ -29,47 +25,23 @@ play.setToken({ youtube: { cookie: youtubeCookie,} });
 
 const searchCache = new Map();
 
-async function searchWithRetry(query, limit = 1, retries = 3, delay = 100){
-    if(searchCache.has(query)){
+async function searchYoutube(query) {
+    if(searchCache.has(query)) {
         return searchCache.get(query);
     }
-
-    for (let i = 0; i < retries; i++){
-        try {
-            await new Promise(resolve => setTimeout(res, delay *Math.random()));
-            const results = await play.search(query, { limit });
-            searchCache.set(query, results);
-            return results;
-
-        } catch (err) {
-            if(err.statusCode === 429){
-                const backoff = delay * Math.pow(2, i);
-                console.warn(`⚠️ 429 recebido. Retry em ${backoff}ms (tentativa ${i + 1}/${retries})`);
-                await new Promise(resolve => setTimeout(res, backoff));
-                continue;
+    if(play.yt_validate(query) === 'video'){
+        const direct = { title: query, url: query };
+        searchCache.set(query, direct);
+        return direct;
         }
-        throw err;
-     }
-    }
-throw new Error('Muitas requisições - tente novamente mais tarde.');
+        const res = await yt.search.list({ part: 'snippet', q: query, type: 'video', maxResults: 1 });
+        if(!res.data.items.length) throw new Error('Nenhum vídeo encontrado.');
+        const items = res.data.items[0];
+        const result = { title: items.snippet.title, url: `https://www.youtube.com/watch?v=${items.id.videoId}` };
+        searchCache.set(query, result);
+        return result;
 }
 
-async function streamWithRetry(url, option = { discordPlayerCompatibility: true}, retries = 2, delay = 1000){
-    for (let i = 0; i < retries; i++){
-        try {
-            return await play.stream(url, option);
-        } catch (err) {
-            if(err.statusCode === 429){
-                const backoff = delay * Math.pow(2, i);
-                console.warn(`⚠️ 429 no stream. Retry em ${backoff}ms (tentativa ${i + 1}/${retries})`);
-                await new Promise(res => setTimeout(res, backoff));
-                continue;
-            }
-        throw err;
-        }
-       }
-       throw new Error('');
-}
 
 app.get('/', (req, res) => res.send('Bot Online'));
 app.listen(port, () => console.log(`Servidor rodando na porta ${port}`));
@@ -83,12 +55,11 @@ const client = new Client({
     ],
     partials: [Partials.Channel]
 });
+
 const prefix ='!ed'; //Prefixo para os comandos
 const queue = new  Map();
 
-client.once('ready', () => {
-    console.log(`✅ Logado como ${client.user.tag}`);
-});
+client.once('ready', () => console.log(`✅ Logado como ${client.user.tag}`));
 
 client.on('messageCreate', async message => {
     if (message.author.bot || !message.content.startsWith(prefix)) return;
@@ -124,20 +95,19 @@ client.on('messageCreate', async message => {
         const query = args.join (' ');
         if(!query) return message.channel.send('Forneça um link ou nome de música.');
 
-        const isLink = play.yt_validate(query) === 'video';
-        const results = isLink 
-        ? [{ title: query, url: query}] 
-        : await searchWithRetry(query);
-
-        if (!results.length) return message.channel.send('Nenhum resultado encontrado.');
-        const song = { title: results[0].title, url: results[0].url };
-
-        if (serverQueue) {
-            serverQueue.songs.push(song);
-            return message.channel.send(`✅ Adicionado à fila: ${song.title}`);
+        let song;
+        try {
+            song = await searchYoutube(query);
+        }catch (err){
+            return message.channel.send(`❌ ${err.message}`);
         }
 
-        const queueContruct = {
+        if(serverQueue){
+            serverQueue.songs.push(song);
+            return message.channel.send(`Adicionada à fila: ${song.title}`);
+        }
+
+        const queueConstruct = {
             textChannel: message.channel,
             connection: null,
             player: null,
@@ -148,7 +118,7 @@ client.on('messageCreate', async message => {
             startTime: 0,
             stopTime: null,
         };
-        queue.set(message.guild.id, queueContruct);
+        queue.set(message.guild.id, queueConstruct);
 
         try {
             const connection = joinVoiceChannel({
@@ -156,18 +126,16 @@ client.on('messageCreate', async message => {
                 guildId: message.guild.id,
                 adapterCreator: message.guild.voiceAdapterCreator
             });
-
-            const player = createAudioPlayer({ behaviors: { noSubscriberBehavior: NoSubscriberBehavior.Pause } });
+            const player = createAudioPlayer({ behaviors: { noSubscriberBehavior: NoSubscriberBehavior.Pause} });
             connection.subscribe(player);
-            queueContruct.connection = connection;
-            queueContruct.player = player;
+            queueConstruct.connection = connection;
+            queueConstruct.player = player;
             playNextSong(message.guild.id);
         } catch (error) {
             console.error('Erro ao conectar ao canal de voz:', error);
             queue.delete(message.guild.id);
             return message.channel.send('❌ Erro ao conectar ao canal de voz.');
         }
-        
     }
         
     if(command === 'pause'){
