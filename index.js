@@ -6,7 +6,7 @@ const express = require('express');
 const app = express();
 const port = process.env.PORT || 3000;
 
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, REST } = require('discord.js');
 const { joinVoiceChannel, 
         createAudioPlayer,
         createAudioResource, 
@@ -16,16 +16,42 @@ const { joinVoiceChannel,
 
 
 const { Innertube } = require('youtubei.js');
+const tough = require('tough-cookie');
+const { CookieJar } = require('tough-cookie');
+
+function createCookieJar() {
+    const jar = new tough.CookieJar();
+    cookieString.split(';').forEach(pair => {
+        const [name, ...rest] = pair.trim().split('=');
+        if (!name && rest.length === 0) return;
+        const value = rest.join('=');
+
+        jar.setCookieSync(`${name}=${value}`, 'https://www.youtube.com');
+    });
+    return jar;
+}
 
 let ytClient;
 (async () => {
+    const jar = buildCookieJar(process.env.YOUTUBE_COOKIES);
     ytClient = await Innertube.create({
-        session: {
-            cookie: process.env.YOUTUBE_COOKIES
-        }
+        session: { cookieJar: jar}
     });
-})().catch(err => console.error('Erro ao inicializar o cliente do YouTube:', err));
-const searchCache = new Map();
+    console.log('✅ InnerTube inicializado corretamente com cookies.');
+    })().catch(err => {
+        console.error('❌ Erro ao inicializar InnerTube:', err);
+
+    });
+
+(async () => {
+    try {
+        const testId='vnwAhkwi5Ms&lc=UgxAJOeNiJuH8CNfeNp4AaABAg.AHScTgC1_JUAHTidsGW8TD';
+        const info = await ytClient.getBasicInfo(testId);
+        console.log('Playability Status:', info.playabilityStatus.status);
+    } catch (e) {
+        console.error('❌ Erro ao obter informações do vídeo:', e);
+    }
+})();
 
 async function searchYoutube(query) {
     if(searchCache.has(query)) { return searchCache.get(query); }
