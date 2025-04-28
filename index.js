@@ -19,7 +19,7 @@ const { Innertube } = require('youtubei.js');
 const tough = require('tough-cookie');
 const { CookieJar } = require('tough-cookie');
 
-function createCookieJar() {
+function createCookieJar(cookieString) {
     const jar = new tough.CookieJar();
     if(!cookieString) return jar;
     cookieString.split(';').forEach(pair => {
