@@ -82,8 +82,8 @@ async function getAudioStream(videoURL){
     if(!ytClient){
         throw new Error('Cliente do YouTube não inicializado.');
     }
-    const idMatch = videoURL.match(/v=([\w-]{11})/);
-    const videoId = idMatch ? idMatch[1] : videoURL;
+    
+    const videoId = getVideoId(videoURL);
     const info = await ytClient.getBasicInfo(videoId);
 
     console.dir(info.playabilityStatus, { depth: 3 });
@@ -119,6 +119,16 @@ async function getAudioStream(videoURL){
     }
 
     return { stream: response.body, type: StreamType.Arbitrary };
+}
+
+function getVideoId(url) {
+    try {
+        const url = new URL(urlOrId);
+        return url.searchParams.get('v') 
+        || url.pathname.split('/').pop();
+    } catch{
+        return urlOrId;
+    }
 }
 
 app.get('/', (req, res) => res.send('Bot Online'));
