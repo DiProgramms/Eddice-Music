@@ -95,6 +95,9 @@ async function getAudioStream(videoURL){
     ps?.status ??
     'Desconhecido';
 
+    console.dir(info.playabilityStatus, { depth: null });
+    console.dir(info.streamingData, { depth: null });
+
     if(ps?.status !== 'OK'){
         throw new Error(`Erro ao acessar o vídeo: ${reason}`);
     }
