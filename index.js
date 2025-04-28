@@ -21,11 +21,11 @@ const { CookieJar } = require('tough-cookie');
 
 function createCookieJar() {
     const jar = new tough.CookieJar();
+    if(!cookieString) return jar;
     cookieString.split(';').forEach(pair => {
         const [name, ...rest] = pair.trim().split('=');
         if (!name && rest.length === 0) return;
         const value = rest.join('=');
-
         jar.setCookieSync(`${name}=${value}`, 'https://www.youtube.com');
     });
     return jar;
@@ -33,7 +33,7 @@ function createCookieJar() {
 
 let ytClient;
 (async () => {
-    const jar = buildCookieJar(process.env.YOUTUBE_COOKIES);
+    const jar = createCookieJar(process.env.YOUTUBE_COOKIES);
     ytClient = await Innertube.create({
         session: { cookieJar: jar}
     });
@@ -44,8 +44,9 @@ let ytClient;
     });
 
 (async () => {
+    if (!ytClient) return;
+    const testId='vnwAhkwi5Ms&lc';
     try {
-        const testId='vnwAhkwi5Ms&lc=UgxAJOeNiJuH8CNfeNp4AaABAg.AHScTgC1_JUAHTidsGW8TD';
         const info = await ytClient.getBasicInfo(testId);
         console.log('Playability Status:', info.playabilityStatus.status);
     } catch (e) {
