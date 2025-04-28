@@ -14,7 +14,7 @@ const { joinVoiceChannel,
         NoSubscriberBehavior, 
         StreamType } = require('@discordjs/voice'); 
 
-
+const searchCache = new Map();
 const { Innertube } = require('youtubei.js');
 const tough = require('tough-cookie');
 const { CookieJar } = require('tough-cookie');
