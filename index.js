@@ -84,28 +84,29 @@ async function getAudioStream(videoURL){
     }
     const idMatch = videoURL.match(/v=([\w-]{11})/);
     const videoId = idMatch ? idMatch[1] : videoURL;
-
     const info = await ytClient.getBasicInfo(videoId);
 
-    const status = info.playabilityStatus?.status;
+    console.dir(info.playabilityStatus, { depth: 3 });
 
-    if(status !== 'OK'){
+    const ps = info.playabilityStatus;
+    const reason = 
+    ps?.reason ?? 
+    ps?.errorScreen?.playerErrorMessage?.reason?.simpleText ??
+    ps?.status ??
+    'Desconhecido';
 
-        let reason = info.playabilityStatus?.reason;
-        reason ||=info.playabilityStatus?.errorScreen?.playerErrorMessage?.reason?.simpleText;
-        reason ||= status;
-
+    if(ps?.status !== 'OK'){
         throw new Error(`Erro ao acessar o vídeo: ${reason}`);
+    }
+
+    if(!info.streamingData?.formats?.length){
+        throw new Error('Nenhum formato de áudio encontrado.');
     }
 
     console.log(info);
 
-    if(!info.streaming_data || !info.streaming_data.formats.length){
-        throw new Error('Nenhum formato de áudio encontrado.');
-    }
-
-    const format = info.chooseFormat({ filter : fm => fm.mimeType?.startsWith('audio/') });
-    if(!format || !format.url) {
+    const format = info.chooseFormat(fm => fm.mimeType?.startsWith('audio/'));
+    if(!format.url) {
         throw new Error('Formato de áudio não encontrado.');
     }
     
