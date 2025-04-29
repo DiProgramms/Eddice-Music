@@ -121,15 +121,17 @@ async function getAudioStream(videoURL){
     return { stream: response.body, type: StreamType.Arbitrary };
 }
 
-function getVideoId(url) {
+function getVideoId(urlOrId) {
     try {
-        const url = new URL(urlOrId);
-        return url.searchParams.get('v') 
-        || url.pathname.split('/').pop();
+        const parsed = new URL(urlOrId);
+        return parsed.searchParams.get('v') 
+        || parsed.pathname.split('/').pop();
     } catch{
         return urlOrId;
     }
 }
+
+console.log(getVideoId('https://www.youtube.com/watch?v=vnwAhkwi5Ms&lc=…'));
 
 app.get('/', (req, res) => res.send('Bot Online'));
 app.listen(port, () => console.log(`Servidor rodando na porta ${port}`));
