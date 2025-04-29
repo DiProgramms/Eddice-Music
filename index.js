@@ -45,7 +45,7 @@ let ytClient;
 
 (async () => {
     if (!ytClient) return;
-    const testId='vnwAhkwi5Ms&lc';
+    const testId='vnwAhkwi5Ms';
     try {
         const info = await ytClient.getBasicInfo(testId);
         console.log('Playability Status:', info.playabilityStatus.status);
