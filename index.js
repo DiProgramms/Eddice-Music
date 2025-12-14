@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { google } = require('googleapis');
+const ytdl = require('@distube/ytdl-core');
 const yt = google.youtube( { version: 'v3', auth: process.env.YOUTUBE_API_KEY });
 
 const express = require('express');
@@ -79,46 +80,44 @@ async function searchYoutube(query) {
 }
 
 async function getAudioStream(videoURL){
-    if(!ytClient){
-        throw new Error('Cliente do YouTube não inicializado.');
-    }
-    
     const videoId = getVideoId(videoURL);
-    const info = await ytClient.getBasicInfo(videoId);
 
-    console.dir(info.playabilityStatus, { depth: 3 });
+    // 1) Tenta pelo InnerTube
+    if (ytClient) {
+        try {
+            const info = await ytClient.getBasicInfo(videoId);
 
-    const ps = info.playabilityStatus;
-    const reason = 
-    ps?.reason ?? 
-    ps?.errorScreen?.playerErrorMessage?.reason?.simpleText ??
-    ps?.status ??
-    'Desconhecido';
+            const ps = info.playabilityStatus;
+            const reason =
+                ps?.reason ??
+                ps?.errorScreen?.playerErrorMessage?.reason?.simpleText ??
+                ps?.status ??
+                'Desconhecido';
 
-    console.dir(info.playabilityStatus, { depth: null });
-    console.dir(info.streamingData, { depth: null });
-
-    if(ps?.status !== 'OK'){
-        throw new Error(`Erro ao acessar o vídeo: ${reason}`);
+            if (ps?.status === 'OK' && info.streamingData?.formats?.length) {
+                const format = info.chooseFormat(fm => fm.mimeType?.startsWith('audio/'));
+                if (format?.url) {
+                    const response = await fetch(format.url);
+                    if (response.body) {
+                        return { stream: response.body, type: StreamType.Arbitrary };
+                    }
+                }
+            } else {
+                console.warn('InnerTube não pôde tocar, motivo:', reason);
+            }
+        } catch (e) {
+            console.warn('Falha no InnerTube, usando fallback ytdl-core:', e.message);
+        }
     }
 
-    if(!info.streamingData?.formats?.length){
-        throw new Error('Nenhum formato de áudio encontrado.');
-    }
+    // 2) Fallback com ytdl-core
+    const ytdlStream = ytdl(videoURL, {
+        filter: 'audioonly',
+        quality: 'highestaudio',
+        highWaterMark: 1 << 25
+    });
 
-    console.log(info);
-
-    const format = info.chooseFormat(fm => fm.mimeType?.startsWith('audio/'));
-    if(!format.url) {
-        throw new Error('Formato de áudio não encontrado.');
-    }
-    
-    const response = await fetch(format.url);
-    if(!response.body) {
-        throw new Error(`Erro ao acessar o stream: ${response.statusText}`);
-    }
-
-    return { stream: response.body, type: StreamType.Arbitrary };
+    return { stream: ytdlStream, type: StreamType.Arbitrary };
 }
 
 function getVideoId(urlOrId) {
