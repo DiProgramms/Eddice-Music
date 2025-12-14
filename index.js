@@ -143,7 +143,7 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildVoiceStates,
     ],
-    partials: [Partials.Channel]
+    partials: [Partials.Channel, Partials.Message]
 });
 
 const prefix ='!ed'; //Prefixo para os comandos
@@ -308,7 +308,7 @@ client.on('messageCreate', async message => {
     if(command === 'repeat' ){
         if(args[0] === 'current'){
             serverQueue.repeat = !serverQueue.repeat;
-            return messsage.channel.send(`🔁 Repetição ${serverQueue.repeat ? 'ativada' : 'desativada'}.`);
+            return message.channel.send(`🔁 Repetição ${serverQueue.repeat ? 'ativada' : 'desativada'}.`);
         }
     }
 
@@ -316,7 +316,7 @@ client.on('messageCreate', async message => {
         if(!serverQueue || serverQueue.songs.length === 0)
             return message.channel.send('📭 A fila está vazia.');
         
-        const fila = serverQueue.songs.map((song, i) => `${i+ 1}. ${song}`).join('\n');
+        const fila = serverQueue.songs.map((song, i) => `${i+ 1}. ${song.title}`).join('\n');
         message.channel.send(`📃 **Fila de Reprodução:**\n${fila}`);
     }
 
