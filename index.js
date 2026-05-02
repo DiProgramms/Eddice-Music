@@ -41,9 +41,12 @@ client.on('messageCreate', async message => {
         //Lógica para exibir informações de ajuda 
         const helpMessage = `
     **🎵 Comandos disponíveis:**
-    - \`!ed play [link|nome]\` — Toca música do YouTube.
-    - \`!ed pause\` — Pausa a música.
+
+    - \`!ed salvar <nome>\` - Salva uma música no diretório.
+    - \`!ed play <nome>\` — Toca música do diretório.
+    - \`!ed fila\` - Mostra a fila atual.
     - \`!ed resume\` — Retoma a música.
+    - \`!ed pause\` — Pausa a música.
     - \`!ed stop\` — Para e limpa a fila.
     - \`!ed skip\` — Pula a faixa.
     - \`!ed back\` — Volta para a faixa anterior.
@@ -52,7 +55,8 @@ client.on('messageCreate', async message => {
     - \`!ed stoptime <s>\` — Define término da faixa.
     - \`!ed restart\` — Reinicia a faixa atual.
     - \`!ed roll 1d20+1d12-3\` — Rola múltiplos dados.
-    `;
+    `
+    ;
         return message.channel.send(helpMessage);
     }
 
@@ -72,27 +76,31 @@ client.on('messageCreate', async message => {
 
     if(command === 'play') {    
         //Lógica para reproduzir música
-        const nome = args[0];
-        const caminho = path.join(MUSICAS_DIR, `${nome}.mp3`);
-        if (!fs.existsSync(caminho)) return message.channel.send('❌ Música não encontrada.');
+        const nomeEntrada = args[0];
+        const nomeArquivo = nomeEntrada.endsWith('.mp3') ? nomeEntrada : `${nomeEntrada}.mp3`;
+        const caminho = path.join(MUSICAS_DIR, nomeArquivo);
+
+        if (!fs.existsSync(caminho)){
+            return message.channel.send(`❌ Música não encontrada: ${nomeArquivo}`);
+        }
 
         const VoiceChannel = message.member.voice.channel;
         if(!VoiceChannel) return message.channel.send('Entre em um canal de voz!');
 
         if(!serverQueue){
-            const q = {
-                connection: joinVoiceChannel({ channelId: VoiceChannel.id, guildId: message.guild.id, 
-            adapterCreator: message.guild.voiceAdapterCreator}),
-            player: createAudioPlayer(),
-            songs: [{ title: nome, path: caminho}]
+            const connection = joinVoiceChannel ({ channelId: VoiceChannel.id, guildId: message.guild.id, 
+            adapterCreator: message.guild.voiceAdapterCreator});
+            
+            const player = createAudioPlayer();
+            const q = { connection, player, songs: [{ title: nomeArquivo, path: caminho}]
             };
 
-            q.connection.subscribe(q.player);
+            connection.subscribe(q.player);
             queue.set(message.guild.id, q);
             play(q);
         } else {
-            serverQueue.songs.push({ title: nome, path: caminho});
-            message.channel.send(`Adicionado à fila: ${nome}`);
+            serverQueue.songs.push({ title: nomeArquivo, path: caminho});
+            message.channel.send(`Adicionado à fila: ${nomeArquivo}`);
         }
     }
 
@@ -212,10 +220,22 @@ function play(q){
         queue.delete(q.connection.joinConfig.guildId);
         return;
     }
-    const song = q.songs.shift();
-    const resource = createAudioResource(song.path);
-    q.player.play(resource);
-    q.player.once(AudioPlayerStatus.Idle, () => play(q));
+
+    const song = q.songs[0];
+
+    try{
+        const resource = createAudioResource(song.path);
+        q.player.play(resource);
+
+        q.player.once(AudioPlayerStatus.Idle, () => {
+            q.songs.shift();
+        });
+    } catch (err){
+        console.error("Erro ao criar recurso de áudio:", err);
+        q.songs.shift();
+        play(q);
+    }
+    
 }
 
 function rollDice(input){
