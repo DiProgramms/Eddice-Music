@@ -1,154 +1,34 @@
 require('dotenv').config();
-const { google } = require('googleapis');
-const ytdl = require('@distube/ytdl-core');
-const yt = google.youtube( { version: 'v3', auth: process.env.YOUTUBE_API_KEY });
 
-const express = require('express');
-const app = express();
-const port = process.env.PORT || 3000;
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus} = require('@discordjs/voice'); 
 
-const { Client, GatewayIntentBits, Partials, REST } = require('discord.js');
-const { joinVoiceChannel, 
-        createAudioPlayer,
-        createAudioResource, 
-        AudioPlayerStatus, 
-        NoSubscriberBehavior, 
-        StreamType } = require('@discordjs/voice'); 
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
 
-const searchCache = new Map();
-const { Innertube } = require('youtubei.js');
-const tough = require('tough-cookie');
-const { CookieJar } = require('tough-cookie');
-
-function createCookieJar(cookieString) {
-    const jar = new tough.CookieJar();
-    if(!cookieString) return jar;
-    cookieString.split(';').forEach(pair => {
-        const [name, ...rest] = pair.trim().split('=');
-        if (!name && rest.length === 0) return;
-        const value = rest.join('=');
-        jar.setCookieSync(`${name}=${value}`, 'https://www.youtube.com');
-    });
-    return jar;
-}
-
-let ytClient;
-(async () => {
-    const jar = createCookieJar(process.env.YOUTUBE_COOKIES);
-    ytClient = await Innertube.create({
-        session: { cookieJar: jar}
-    });
-    console.log('✅ InnerTube inicializado corretamente com cookies.');
-    })().catch(err => {
-        console.error('❌ Erro ao inicializar InnerTube:', err);
-
-    });
-
-(async () => {
-    if (!ytClient) return;
-    const testId='vnwAhkwi5Ms';
-    try {
-        const info = await ytClient.getBasicInfo(testId);
-        console.log('Playability Status:', info.playabilityStatus.status);
-    } catch (e) {
-        console.error('❌ Erro ao obter informações do vídeo:', e);
-    }
-})();
-
-async function searchYoutube(query) {
-    if(searchCache.has(query)) { return searchCache.get(query); }
-    const isYoutubeUrl = /^https?:\/\/(www\.)?(youtu\.be|youtube\.com)\/.+/.test(query);
-
-    if(isYoutubeUrl){
-        const direct = { title: 'Direto', url: query };
-        searchCache.set(query, direct);
-        return direct;
-    }
-
-    const res = await yt.search.list({ part: 'snippet', q: query, type: 'video', maxResults: 1 });
-    if(!res.data.items.length) {
-        throw new Error('Nenhum resultado encontrado.');
-    }
-    const item = res.data.items[0];
-    const videoId = item.id.videoId;
-    const result = {
-        title: item.snippet.title,
-        url: `https://www.youtube.com/watch?v=${videoId}`,
-    };
-    searchCache.set(query, result);
-    return result;
-}
-
-async function getAudioStream(videoURL){
-    const videoId = getVideoId(videoURL);
-
-    // 1) Tenta pelo InnerTube
-    if (ytClient) {
-        try {
-            const info = await ytClient.getBasicInfo(videoId);
-
-            const ps = info.playabilityStatus;
-            const reason =
-                ps?.reason ??
-                ps?.errorScreen?.playerErrorMessage?.reason?.simpleText ??
-                ps?.status ??
-                'Desconhecido';
-
-            if (ps?.status === 'OK' && info.streamingData?.formats?.length) {
-                const format = info.chooseFormat(fm => fm.mimeType?.startsWith('audio/'));
-                if (format?.url) {
-                    const response = await fetch(format.url);
-                    if (response.body) {
-                        return { stream: response.body, type: StreamType.Arbitrary };
-                    }
-                }
-            } else {
-                console.warn('InnerTube não pôde tocar, motivo:', reason);
-            }
-        } catch (e) {
-            console.warn('Falha no InnerTube, usando fallback ytdl-core:', e.message);
-        }
-    }
-
-    // 2) Fallback com ytdl-core
-    const ytdlStream = ytdl(videoURL, {
-        filter: 'audioonly',
-        quality: 'highestaudio',
-        highWaterMark: 1 << 25
-    });
-
-    return { stream: ytdlStream, type: StreamType.Arbitrary };
-}
-
-function getVideoId(urlOrId) {
-    try {
-        const parsed = new URL(urlOrId);
-        return parsed.searchParams.get('v') 
-        || parsed.pathname.split('/').pop();
-    } catch{
-        return urlOrId;
-    }
-}
-
-console.log(getVideoId('https://www.youtube.com/watch?v=vnwAhkwi5Ms&lc=…'));
-
-app.get('/', (req, res) => res.send('Bot Online'));
-app.listen(port, () => console.log(`Servidor rodando na porta ${port}`));
-
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildVoiceStates,
-    ],
-    partials: [Partials.Channel, Partials.Message]
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates], partials: [Partials.Channel, Partials.Message] })
 
 const prefix ='!ed'; //Prefixo para os comandos
 const queue = new  Map();
+const MUSICAS_DIR = path.join(__dirname, 'musicas');
 
-client.once('ready', () => console.log(`✅ Logado como ${client.user.tag}`));
+if (!fs.existsSync(MUSICAS_DIR)) fs.mkdirSync(MUSICAS_DIR);
+
+async function baixarMusica(attachment, nome){
+    const caminho = path.join(MUSICAS_DIR, nome);
+    const writer = fs.createWriteStream(caminho);
+    const response = await axios({ url: attachment.url, method: 'GET', responseType: 'stream'});
+    response.data.pipe(writer);
+    return new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+    });
+}
+
+
+client.once('ready', () => console.log(`✅ Logado como ${client.user.tag}. Pronto para tocar suas músicas!`));
 
 client.on('messageCreate', async message => {
     if (message.author.bot || !message.content.startsWith(prefix)) return;
@@ -176,65 +56,58 @@ client.on('messageCreate', async message => {
         return message.channel.send(helpMessage);
     }
 
+    if(command === 'salvar'){
+        const nome = args[0];
+        const attachment = message.attachments.first();
+        if (!nome || !attachment) return message.channel.send('❌ Use: !ed salvar <nome> (anexando um áudio)');
+        
+        await baixarMusica(attachment, nome);
+        return message.channel.send(`🎵 Música salva com sucesso: ${nome}`);
+    }
+
+    if(command === 'listar'){
+        const arquivos = fs.readdirSync(MUSICAS_DIR).map(f => f.replace('.mp3', ''));
+        return message.channel.send(`📜 Biblioteca:\n${arquivos.join(', ')}`);
+    }
+
     if(command === 'play') {    
-        //Lógica para reproduzir música usando ytdl
-        const voiceChannel = message.member.voice.channel;
-        if(!voiceChannel) return message.channel.send('Entre em um canal de voz primeiro!');
+        //Lógica para reproduzir música
+        const nome = args[0];
+        const caminho = path.join(MUSICAS_DIR, `${nome}.mp3`);
+        if (!fs.existsSync(caminho)) return message.channel.send('❌ Música não encontrada.');
 
-        const query = args.join (' ');
-        if(!query) return message.channel.send('Forneça um link ou nome de música.');
+        const VoiceChannel = message.member.voice.channel;
+        if(!VoiceChannel) return message.channel.send('Entre em um canal de voz!');
 
-        let song;
-        try {
-            song = await searchYoutube(query);
-        }catch (err){
-            return message.channel.send(`❌ ${err.message}`);
-        }
+        if(!serverQueue){
+            const q = {
+                connection: joinVoiceChannel({ channelId: VoiceChannel.id, guildId: message.guild.id, 
+            adapterCreator: message.guild.voiceAdapterCreator}),
+            player: createAudioPlayer(),
+            songs: [{ title: nome, path: caminho}]
+            };
 
-        if(serverQueue){
-            serverQueue.songs.push(song);
-            return message.channel.send(`Adicionada à fila: ${song.title}`);
-        }
-
-        const queueConstruct = {
-            textChannel: message.channel,
-            connection: null,
-            player: null,
-            songs: [song],
-            history: [],
-            repeat: false,
-            isBack: false,
-            startTime: 0,
-            stopTime: null,
-        };
-        queue.set(message.guild.id, queueConstruct);
-
-        try {
-            const connection = joinVoiceChannel({
-                channelId: voiceChannel.id,
-                guildId: message.guild.id,
-                adapterCreator: message.guild.voiceAdapterCreator
-            });
-            const player = createAudioPlayer({ behaviors: { noSubscriberBehavior: NoSubscriberBehavior.Pause} });
-            connection.subscribe(player);
-            queueConstruct.connection = connection;
-            queueConstruct.player = player;
-            playNextSong(message.guild.id);
-        } catch (error) {
-            console.error('Erro ao conectar ao canal de voz:', error);
-            queue.delete(message.guild.id);
-            return message.channel.send('❌ Erro ao conectar ao canal de voz.');
+            q.connection.subscribe(q.player);
+            queue.set(message.guild.id, q);
+            play(q);
+        } else {
+            serverQueue.songs.push({ title: nome, path: caminho});
+            message.channel.send(`Adicionado à fila: ${nome}`);
         }
     }
-        
-    if(command === 'pause'){
-            //Lógica para pausar a música
-            if(serverQueue?.player){
-                serverQueue.player.pause();
-                message.channel.send('Música pausada.');
-            }
-        }        
 
+    if(command === 'stop'){
+        //Lógica para parar completamente a música e limpar a fila.
+        if(!serverQueue) return message.channel.send('Nenhuma música está sendo reproduzida.');
+
+        if(serverQueue.connection){
+            serverQueue.connection.destroy();
+            queue.delete(message.guild.id); message.channel.send('⏹ Música parada e fila limpa.');
+        }else{
+            message.channel.send('❌ Erro ao parar a música.');
+        }
+    }
+     
     if(command === 'resume'){
         //Lógica para retomar a reprodução da música pausada
         if(serverQueue?.player){
@@ -242,6 +115,14 @@ client.on('messageCreate', async message => {
             message.channel.send('▶️ Música retomada.');  
         }
     }
+
+    if(command === 'pause'){
+            //Lógica para pausar a música
+            if(serverQueue?.player){
+                serverQueue.player.pause();
+                message.channel.send('Música pausada.');
+            }
+        }        
 
     if(command === 'restart'){
         if(!serverQueue) return message.channel.send('Nenhuma música está sendo reproduzida.');
@@ -252,18 +133,6 @@ client.on('messageCreate', async message => {
         return message.channel.send(`🔄 Reiniciando: ${last.title}`);
     }
 
-    if(command === 'stop'){
-        //Lógica para parar completamente a música e limpar a fila.
-        if(!serverQueue) return message.channel.send('Nenhuma música está sendo reproduzida.');
-        if(serverQueue.connection){
-            serverQueue.connection.destroy();
-            queue.delete(message.guild.id);
-            message.channel.send('⏹ Música parada e fila limpa.');
-        }else{
-            message.channel.send('❌ Erro ao parar a música.');
-        }
-    }
-   
     if(command === 'skip'){
         //Lógica para pular para a próxima música na fila
         if(serverQueue?.player){
@@ -337,35 +206,16 @@ client.on('messageCreate', async message => {
     }
 });
 
-async function playNextSong(guildId) {
-    const serverQueue = queue.get(guildId);
-    if (!serverQueue) return;
-
-    const song = serverQueue.songs.shift();
-    if(!song){
-        serverQueue.connection.destroy();
-        queue.delete(guildId);
+function play(q){
+    if(q.songs.length === 0){
+        q.connection.destroy();
+        queue.delete(q.connection.joinConfig.guildId);
         return;
     }
-
-    serverQueue.history.push(song);
-    try{
-        
-        const ytStream = await getAudioStream(song.url);
-        const resource = createAudioResource(ytStream.stream, { inputType: ytStream.type, metadata: song });
-        serverQueue.player.play(resource);
-        serverQueue.textChannel.send(`🎶 Tocando agora: ${song.title}`);
-        serverQueue.player.on(AudioPlayerStatus.Idle, () => {
-            if(!serverQueue.isBack && !serverQueue.repeat) serverQueue.history.pop();
-                serverQueue.isBack = false;
-                playNextSong(guildId);
-            });
-        }catch(err){
-            console.error('Erro no stream', err);
-            serverQueue.textChannel.send(`❌ Não foi possível reproduzir **${song.title}**: ${err.message}`);
-            serverQueue.connection.destroy();
-            queue.delete(guildId);
-        }
+    const song = q.songs.shift();
+    const resource = createAudioResource(song.path);
+    q.player.play(resource);
+    q.player.once(AudioPlayerStatus.Idle, () => play(q));
 }
 
 function rollDice(input){
