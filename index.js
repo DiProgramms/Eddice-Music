@@ -1,14 +1,24 @@
 require('dotenv').config();
+require('dns').setDefaultResultOrder('ipv4first');
 
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus} = require('@discordjs/voice'); 
-
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState, StreamType} = require('@discordjs/voice');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates], partials: [Partials.Channel, Partials.Message] })
+const { setGlobalDispatcher, Agent } = require('undici');
+// ... logo depois dos imports
+
+const client = new Client({ intents: [
+    GatewayIntentBits.Guilds, 
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent, 
+    GatewayIntentBits.GuildVoiceStates
+    ], 
+    partials: [Partials.Channel, Partials.Message] })
+// ... logo após const player = createAudioPlayer();
+
 
 const prefix ='!ed'; //Prefixo para os comandos
 const queue = new  Map();
@@ -32,8 +42,8 @@ client.once('ready', () => console.log(`✅ Logado como ${client.user.tag}. Pron
 
 client.on('messageCreate', async message => {
     if (message.author.bot || !message.content.startsWith(prefix)) return;
-
     const args = message.content.slice(prefix.length).trim().split(/ +/);
+
     const command = args.shift().toLowerCase();
     const serverQueue = queue.get(message.guild.id);
 
@@ -88,16 +98,47 @@ client.on('messageCreate', async message => {
         if(!VoiceChannel) return message.channel.send('Entre em um canal de voz!');
 
         if(!serverQueue){
-            const connection = joinVoiceChannel ({ channelId: VoiceChannel.id, guildId: message.guild.id, 
-            adapterCreator: message.guild.voiceAdapterCreator});
+            const VoiceChannel = message.member.voice.channel;
+
+            if(!VoiceChannel.joinable) {
+                return message.channel.send('❌ Você precisa estar em um canal de voz para tocar música!');
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 1000)); 
+
+            const connection = joinVoiceChannel ({ 
+                channelId: VoiceChannel.id, 
+                guildId: VoiceChannel.guild.id, 
+                adapterCreator: VoiceChannel.guild.voiceAdapterCreator,
+                selfDeaf: false,
+                selfMute: false
+            });
             
-            const player = createAudioPlayer();
-            const q = { connection, player, songs: [{ title: nomeArquivo, path: caminho}]
+            connection.configureNetworking(); 
+
+            try{
+                console.log('[DEBUG] Esperando conexão ficar pronta...');
+                await entersState(connection, VoiceConnectionStatus.Ready, 60_000);
+                console.log('[DEBUG] Conexão pronta!');
+
+                const player = createAudioPlayer();
+                const q = { connection, player, songs: [{ title: nomeArquivo, path: caminho}]
             };
 
-            connection.subscribe(q.player);
+            console.log('[DEBUG] Conectado com sucesso!');
+            connection.subscribe(player);
             queue.set(message.guild.id, q);
+            console.log('[DEBUG] Fila configurada.');
+
             play(q);
+
+            }catch(err){
+                console.log('[DEBUG] Status atual da conexão:', connection.state.status);
+                console.error('[DEBUG] ERRO DE CONEXÃO:', err);
+                connection.destroy();
+                return message.channel.send('❌ Erro ao conectar ao canal de voz.');
+            }
+            
         } else {
             serverQueue.songs.push({ title: nomeArquivo, path: caminho});
             message.channel.send(`Adicionado à fila: ${nomeArquivo}`);
@@ -215,7 +256,11 @@ client.on('messageCreate', async message => {
 });
 
 function play(q){
+    console.log('[DEBUG] Iniciando função play');
+
     if(q.songs.length === 0){
+
+        console.log('[DEBUG] Fila vazia, desconectando...');
         q.connection.destroy();
         queue.delete(q.connection.joinConfig.guildId);
         return;
@@ -223,12 +268,33 @@ function play(q){
 
     const song = q.songs[0];
 
+    console.log(`[DEBUG] Tocando música: ${song.title}`);
+
+    if (!q.player.listeners('stateChange').length) {
+
+        console.log('[DEBUG] Configurando eventos do player pela primeira vez');
+
+        q.player.on('stateChange', (oldState, newState) => {
+        console.log(`[DEBUG] Player mudou de ${oldState.status} para ${newState.status}`);
+        });
+
+        q.player.on('error', error => {
+        console.error('[DEBUG] Erro fatal no Player:', error);
+        });
+    }
+
     try{
-        const resource = createAudioResource(song.path);
+        const resource = createAudioResource(song.path, {
+            inputType: StreamType.Arbitrary
+        });
+        
+        console.log(`[DEBUG] Tentando tocar: ${song.path}`); // Veja se isto aparece no terminal
+
         q.player.play(resource);
 
         q.player.once(AudioPlayerStatus.Idle, () => {
             q.songs.shift();
+            play(q);
         });
     } catch (err){
         console.error("Erro ao criar recurso de áudio:", err);
@@ -236,6 +302,10 @@ function play(q){
         play(q);
     }
     
+    console.log(`[DEBUG] Recurso de áudio criado para: ${song.path}`);
+    console.log('[DEBUG] Eventos do player configurados.');
+    console.log('[DEBUG] Música iniciada.');
+
 }
 
 function rollDice(input){
